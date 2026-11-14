@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Copy entry.png to the output directory and verify it byte-for-byte.
+"""Deliver this entry's image to the output directory.
 
-Reads the MAKEFUN_OUTPUT_DIR environment variable (default /output),
-creates the output folder if needed, copies the entry.png that sits
-next to this script into that folder, and verifies the copy is
-identical to the source by comparing SHA-256 digests. If the digests
-do not match, it prints an error and exits non-zero.
+The image lives in the repository as ``entry.png`` next to this script.
+Running the program copies it to the directory named by the
+``MAKEFUN_OUTPUT_DIR`` environment variable (``/output`` when the
+variable is unset) and then proves the copy is exact: same byte count
+and same SHA-256 digest as the bundled file. Any mismatch is an error
+and the program exits non-zero, so a bad copy can never pass as a
+good one.
+
+The program is deterministic and uses no network: the same bundled
+bytes are copied on every run, so two runs always write identical
+output.
 """
 
 import hashlib
@@ -13,51 +19,66 @@ import os
 import shutil
 import sys
 
-IMAGE_NAME = "entry.png"
+BUNDLED_IMAGE = "entry.png"
+READ_CHUNK = 65536
 
 
-def sha256_of(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(65536), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def digest(path):
+    """Return the hex SHA-256 digest of the file at ``path``."""
+    hasher = hashlib.sha256()
+    with open(path, "rb") as stream:
+        while True:
+            chunk = stream.read(READ_CHUNK)
+            if not chunk:
+                break
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
-def main():
+def deliver():
+    """Copy the bundled image to the output directory and verify it."""
     output_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    source = os.path.join(script_dir, IMAGE_NAME)
+    here = os.path.dirname(os.path.abspath(__file__))
+    source = os.path.join(here, BUNDLED_IMAGE)
+    if not os.path.isfile(source):
+        print(
+            "error: bundled image not found: {}".format(source),
+            file=sys.stderr,
+        )
+        return 1
     os.makedirs(output_dir, exist_ok=True)
-    destination = os.path.join(output_dir, IMAGE_NAME)
-    shutil.copyfile(source, destination)
-    source_size = os.path.getsize(source)
-    copy_size = os.path.getsize(destination)
-    if source_size != copy_size:
+    target = os.path.join(output_dir, BUNDLED_IMAGE)
+    shutil.copyfile(source, target)
+
+    source_bytes = os.path.getsize(source)
+    target_bytes = os.path.getsize(target)
+    if source_bytes != target_bytes:
         print(
-            "error: size mismatch for {}: source {} bytes != copy {} bytes".format(
-                IMAGE_NAME, source_size, copy_size
+            "error: {} copied {} bytes, expected {}".format(
+                BUNDLED_IMAGE, target_bytes, source_bytes
             ),
             file=sys.stderr,
         )
         return 1
-    source_hash = sha256_of(source)
-    copy_hash = sha256_of(destination)
-    if source_hash != copy_hash:
+
+    source_hash = digest(source)
+    target_hash = digest(target)
+    if source_hash != target_hash:
         print(
-            "error: SHA-256 mismatch for {}: source {} != copy {}".format(
-                IMAGE_NAME, source_hash, copy_hash
+            "error: SHA-256 mismatch for {}: {} != {}".format(
+                BUNDLED_IMAGE, target_hash, source_hash
             ),
             file=sys.stderr,
         )
         return 1
+
     print(
-        "success: copied {} to {} ({} bytes, SHA-256 verified)".format(
-            IMAGE_NAME, destination, copy_size
+        "ok: {} -> {} ({} bytes, sha256 {})".format(
+            BUNDLED_IMAGE, target, source_bytes, source_hash
         )
     )
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(deliver())
